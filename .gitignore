@@ -1,0 +1,9 @@
+data/curated/telemetry_full.parquet
+data/processed/parquets_processados/
+data/processed/csvs/
+data/14619787.zip
+data/raw/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.log
