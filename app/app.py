@@ -12,7 +12,7 @@ def load_data():
     # 1. Path Resolution (Tenta relativo, depois absoluto)
     path = Path(__file__).parent.parent / "data" / "processed" / "telemetry_app.parquet"
     if not path.exists():
-        path = Path(r"E:\Tese\idletime\data\processed\telemetry_app.parquet")
+        path = Path(r"E:/Tese/idletime/data/processed/telemetry_app.parquet")
     
     if not path.exists():
         st.error("❌ Data file not found!")
