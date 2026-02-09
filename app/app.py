@@ -1,191 +1,559 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import pydeck as pdk
+import folium
+from folium.plugins import TimestampedGeoJson
+from streamlit_folium import st_folium
 from pathlib import Path
+from datetime import timedelta
 
 # --- PAGE CONFIG ---
-st.set_page_config(layout="wide", page_title="Fendt Fleet: GPU Efficiency Map")
+st.set_page_config(layout="wide", page_title="Analítico de tempo ocioso em tratores agrícolas", page_icon="🚜")
 
-# --- DATA LOADING (Optimized) ---
-@st.cache_data
+# =============================================================================
+# CONSTANTS
+# =============================================================================
+DIESEL_PRICE_EUR = 1.588
+EMISSION_FACTOR  = 2.64
+DELTA_T_CUTOFF   = 300
+
+# =============================================================================
+# DATA LOADING — runs ONCE, cached by Streamlit
+# =============================================================================
+# --- CONFIGURAÇÃO GLOBAL ---
+DEV_FAST_MODE = True  # <--- MUDE PARA FALSE QUANDO FOR O DIA DA APRESENTAÇÃO
+
+@st.cache_data(show_spinner="Carregando dados...")
 def load_data():
-    # 1. Path Resolution (Tenta relativo, depois absoluto)
+    """
+    Carrega parquet → reconstrói delta_t → calcula litros reais → pré-calcula KPIs.
+    """
     path = Path(__file__).parent.parent / "data" / "processed" / "telemetry_app.parquet"
     if not path.exists():
         path = Path(r"E:/Tese/idletime/data/processed/telemetry_app.parquet")
-    
     if not path.exists():
-        st.error("❌ Data file not found!")
-        return None
-        
-    # 2. Load only necessary columns for map & KPIs
-    cols = ['timestamp', 'tractor', 'latitude', 'longitude', 'speed', 'activity', 'state', 'liters_consumed']
-    df = pd.read_parquet(path, columns=cols)
+        return None, None, None
+
+    # --- Load only needed columns ---
+    cols = ['timestamp', 'tractor', 'latitude', 'longitude',
+            'speed', 'activity', 'state', 'liters_consumed']
+
+    # === BLOCO DE OTIMIZAÇÃO DE LEITURA ===
+    if DEV_FAST_MODE:
+        # Lê apenas as primeiras 500k linhas usando PyArrow (Super Rápido)
+        import pyarrow.parquet as pq
+        parquet_file = pq.ParquetFile(path)
+        # O iter_batches evita carregar o arquivo todo na RAM
+        batch = next(parquet_file.iter_batches(batch_size=500000, columns=cols))
+        df = batch.to_pandas()
+    else:
+        # Lê o arquivo completo (Lento)
+        df = pd.read_parquet(path, columns=cols)
+    # ======================================
+
+    # --- Types: force numeric once ---
+    df['latitude']  = df['latitude'].astype('float32')
+    df['longitude'] = df['longitude'].astype('float32')
+    df['speed']     = pd.to_numeric(df['speed'], errors='coerce').fillna(0).astype('float32')
+    df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
+
+    # liters_consumed in the parquet = fuel_rate (L/h), NOT volume
+    df.rename(columns={'liters_consumed': 'fuel_rate_lh'}, inplace=True)
+    df['fuel_rate_lh'] = pd.to_numeric(df['fuel_rate_lh'], errors='coerce').fillna(0).astype('float32')
+
+    df.dropna(subset=['latitude', 'longitude', 'timestamp'], inplace=True)
+
+    # --- delta_t & liters (vectorized) ---
+    df.sort_values(['tractor', 'timestamp'], inplace=True)
+    dt = df.groupby('tractor')['timestamp'].diff().fillna(0).values
+    dt[dt > DELTA_T_CUTOFF] = 0
+    dt[dt < 0] = 0
+    df['delta_t'] = dt.astype('float32')
+    df['liters'] = (df['fuel_rate_lh'].values * dt / 3600.0).astype('float32')
+
+    # --- datetime for replay ---
+    df['datetime'] = pd.to_datetime(df['timestamp'], unit='s', origin='2024-01-01')
+
+    # --- Pydeck colors as uint8 ---
+    r = np.where(df['state'] == 'Idle', 214, np.where(df['state'] == 'Working', 44, 128)).astype('uint8')
+    g = np.where(df['state'] == 'Idle',  39, np.where(df['state'] == 'Working', 160, 128)).astype('uint8')
+    b = np.where(df['state'] == 'Idle',  40, np.where(df['state'] == 'Working',  44, 128)).astype('uint8')
+    a = np.where(df['state'] == 'Idle', 200, np.where(df['state'] == 'Working', 150,  50)).astype('uint8')
+    df['color_r'] = r; df['color_g'] = g; df['color_b'] = b; df['color_a'] = a
+
+    df.reset_index(drop=True, inplace=True)
+
+    # --- PRECOMPUTE KPIs ---
+    is_idle = (df['state'] == 'Idle')
     
-    # 3. Ensure numeric types for PyDeck (previne erros de visualização)
-    df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce')
-    df['longitude'] = pd.to_numeric(df['longitude'], errors='coerce')
-    df['liters_consumed'] = pd.to_numeric(df['liters_consumed'], errors='coerce').fillna(0)
-    
-    # 4. Color Mapping for Map (R, G, B, Alpha)
-    # Pré-calculamos as cores para o PyDeck não ter que pensar na hora de renderizar
-    color_map = {
-        'Idle': [214, 39, 40, 200],    # Vermelho
-        'Working': [44, 160, 44, 150], # Verde
-        'Off': [128, 128, 128, 50],    # Cinza
-        'Transport': [31, 119, 180, 150] # Azul
+    per_tractor = df.groupby('tractor').agg(
+        total_dt   = ('delta_t', 'sum'),
+        total_fuel = ('liters', 'sum'),
+    )
+    idle_agg = df[is_idle].groupby('tractor').agg(
+        idle_dt   = ('delta_t', 'sum'),
+        idle_fuel = ('liters', 'sum'),
+    )
+    kpi_tractor = per_tractor.join(idle_agg, how='left').fillna(0)
+    kpi_tractor['total_hours'] = kpi_tractor['total_dt'] / 3600
+    kpi_tractor['idle_hours']  = kpi_tractor['idle_dt'] / 3600
+    kpi_tractor['idle_pct']    = np.where(kpi_tractor['total_hours'] > 0,
+                                          kpi_tractor['idle_hours'] / kpi_tractor['total_hours'] * 100, 0)
+    kpi_tractor['fuel_waste_pct'] = np.where(kpi_tractor['total_fuel'] > 0,
+                                             kpi_tractor['idle_fuel'] / kpi_tractor['total_fuel'] * 100, 0)
+
+    kpi_global = {
+        'total_hours': kpi_tractor['total_hours'].sum(),
+        'idle_hours':  kpi_tractor['idle_hours'].sum(),
+        'total_fuel':  kpi_tractor['total_fuel'].sum(),
+        'idle_fuel':   kpi_tractor['idle_fuel'].sum(),
     }
-    
-    # Aplica o mapa (Default para Cinza se o estado for desconhecido)
-    # O uso de fillna com uma lista fixa evita erros
-    df['color'] = df['state'].map(color_map)
-    
-    # Preenchimento de segurança para cores nulas (caso existam estados novos)
-    mask_nan = df['color'].isna()
-    if mask_nan.any():
-        df.loc[mask_nan, 'color'] = pd.Series([[128, 128, 128, 100]] * mask_nan.sum(), index=df[mask_nan].index)
-    
-    return df
+    kpi_global['idle_pct'] = (kpi_global['idle_hours'] / kpi_global['total_hours'] * 100
+                              if kpi_global['total_hours'] > 0 else 0)
+    kpi_global['fuel_waste_pct'] = (kpi_global['idle_fuel'] / kpi_global['total_fuel'] * 100
+                                    if kpi_global['total_fuel'] > 0 else 0)
 
-# --- APP PRINCIPAL ---
-def main():
-    st.title("🚜 Fendt Fleet: GPU Kinetic Map")
-    st.markdown("Use os **Filtros** à esquerda. O mapa atualiza automaticamente sobre imagem de satélite.")
+    return df, kpi_tractor, kpi_global
 
-    df_full = load_data()
-    if df_full is None: return
 
-    # --- SIDEBAR ---
-    st.sidebar.header("⚙️ Configuração")
+# =============================================================================
+# TAB 1: ANÁLISE DE DESPERDÍCIO
+# =============================================================================
+def render_tab_waste(df_full, kpi_tractor, kpi_global):
+    st.markdown("#### Mapa de Eficiência Operacional")
     
-    # 1. Filtros
-    tractors = df_full['tractor'].unique()
-    sel_tractors = st.sidebar.multiselect("Tratores:", tractors, default=tractors[:1]) 
-    
-    # Filtra Dados
-    df_filtered = df_full[df_full['tractor'].isin(sel_tractors)]
-    
-    if df_filtered.empty:
-        st.warning("Nenhum dado selecionado.")
+    # --- SELETOR DE VISÃO ---
+    view_mode = st.radio(
+        "Modo de Visualização:",
+        ["💰 Concentração de Desperdício (3D)", "🚜 Rastro Operacional (2D)"],
+        horizontal=True
+    )
+
+    if view_mode == "💰 Concentração de Desperdício (3D)":
+        st.caption("Colunas indicam **volume de litros desperdiçados**. Cor = Identidade do Trator.")
+    else:
+        st.caption("Pontos indicam o **caminho percorrido**. Cor = Estado (Verde=Trabalhando/Transporte, Vermelho=Ocioso).")
+
+    all_tractors = sorted(df_full['tractor'].unique())
+    sel_tractors = st.sidebar.multiselect(
+        "🚜 Tratores:", all_tractors, default=all_tractors, key="t1_tractors")
+
+    if not sel_tractors:
+        st.warning("Selecione ao menos um trator.")
         return
 
-    # 2. Performance Tuner (Slider de Fluidez)
-    total_points = len(df_filtered)
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🚀 Performance Tuner")
-    
-    # Define padrão inteligente para não travar
-    default_step = 1
-    if total_points > 100000: default_step = 10
-    elif total_points > 50000: default_step = 5
-    
-    step = st.sidebar.slider(f"Amostragem do Mapa (1 = Todos os pontos)", 1, 50, default_step)
-    
-    # Cria o dataframe de visualização (mais leve)
-    df_map = df_filtered.iloc[::step].copy()
-    
-    st.sidebar.caption(f"Visualizando **{len(df_map):,}** de **{total_points:,}** pontos.")
+    step = st.sidebar.slider(
+        "Amostragem (N pontos ignorados)", 1, 100, 95, key="t1_step",
+        help="Aumente se o mapa estiver lento. 1 = todos.")
 
-    # --- CONFIGURAÇÃO DAS CAMADAS (LAYERS) ---
+    # --- KPI Table ---
+    st.markdown("---")
+    kpi_sel = kpi_tractor.loc[kpi_tractor.index.isin(sel_tractors)]
     
-    # VIEW STATE (Centraliza automático)
+    if len(sel_tractors) == len(all_tractors):
+        g = kpi_global
+    else:
+        ks = kpi_sel
+        g = {
+            'total_hours': ks['total_hours'].sum(),
+            'idle_hours':  ks['idle_hours'].sum(),
+            'total_fuel':  ks['total_fuel'].sum(),
+            'idle_fuel':   ks['idle_fuel'].sum(),
+        }
+        g['idle_pct'] = g['idle_hours'] / g['total_hours'] * 100 if g['total_hours'] > 0 else 0
+        g['fuel_waste_pct'] = g['idle_fuel'] / g['total_fuel'] * 100 if g['total_fuel'] > 0 else 0
+
+    c1, c2, c3, c4 = st.columns(4)
+    
+    c1.metric("Horas Motor Ativo", f"{g['total_hours']:,.1f} h")
+       
+    with c2:
+        st.metric("Ociosidade", f"{g['idle_pct']:.1f}%")
+        st.markdown(
+            f"<div style='margin-top: -15px; font-size: 14px; color: #808080;'>"
+            f"{g['idle_hours']:.1f} h paradas</div>", 
+            unsafe_allow_html=True
+        )
+       
+    c3.metric("Diesel Total", f"{g['total_fuel']:,.1f} L")
+    with c4:
+        st.metric("Diesel Desperdiçado", f"{g['idle_fuel']:,.1f} L")
+        st.markdown(
+            f"<div style='margin-top: -15px; font-size: 14px; color: #808080;'>"
+            f"{g['fuel_waste_pct']:.1f}% do total</div>", 
+            unsafe_allow_html=True
+        )
+    # --- PROCESSAMENTO DO MAPA ---
+    st.markdown("---")
+
+    mask = df_full['tractor'].isin(sel_tractors)
+    df_map = df_full.loc[mask].iloc[::step].copy()
+    
+    df_map['latitude'] = df_map['latitude'].astype(float)
+    df_map['longitude'] = df_map['longitude'].astype(float)
+
     mid_lat = df_map['latitude'].mean()
     mid_lon = df_map['longitude'].mean()
-    
-    view_state = pdk.ViewState(
-        latitude=mid_lat,
-        longitude=mid_lon,
-        zoom=14,
-        pitch=45, # Inclinação 3D para ver os hexágonos subindo
-        bearing=0
-    )
 
-    # CAMADA 0: SATÉLITE (Fundo)
-    # Usamos o servidor público da Esri World Imagery (ArcGIS)
-    layer_satellite = pdk.Layer(
-        "TileLayer",
-        data="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        id="satellite-layer",
-        opacity=1.0 # 100% visível
-    )
+    layers = [
+        pdk.Layer(
+            "TileLayer",
+            data="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+            id="satellite-layer",
+            tileSize=256, min_zoom=0, max_zoom=19, opacity=1.0
+        )
+    ]
 
-    # CAMADA 1: RASTRO (Movimento)
-    # Pontos coloridos indicando onde o trator passou e o estado dele
-    layer_scatter = pdk.Layer(
-        "ScatterplotLayer",
-        df_map,
-        get_position=['longitude', 'latitude'],
-        get_color='color',
-        get_radius=3, 
-        pickable=True,
-        opacity=0.8,
-        stroked=False
-    )
+    tooltip = {}
+    pitch = 0
 
-    # CAMADA 2: HEXÁGONOS 3D (Desperdício)
-    # Mostra onde o consumo é mais alto (Hotspots de Ocio)
-    df_idle_map = df_map[df_map['state'] == 'Idle']
-    
-    layer_hex = pdk.Layer(
-        "HexagonLayer",
-        df_idle_map,
-        get_position=['longitude', 'latitude'],
-        auto_highlight=True,
-        elevation_scale=4,
-        pickable=True,
-        elevation_range=[0, 100],
-        extruded=True,
-        coverage=1,
-        radius=15, 
-        upper_percentile=98,
-        material=True,
-        get_fill_color=[255, 69, 0, 200] # Laranja-Avermelhado
-    )
+    # ---------------------------------------------------------
+    # MODO A: DESPERDÍCIO 3D
+    # ---------------------------------------------------------
+    if view_mode == "💰 Concentração de Desperdício (3D)":
+        df_idle = df_map[df_map['state'] == 'Idle'].copy()
+        
+        if not df_idle.empty:
+            unique_tractors = sorted(df_idle['tractor'].unique())
+            base_palette = [
+                [0, 255, 255], [0, 128, 255], [255, 0, 255], [255, 165, 0],
+                [50, 205, 50], [255, 255, 0], [138, 43, 226], [255, 192, 203]
+            ]
+            tractor_colors = {t: base_palette[i % len(base_palette)] for i, t in enumerate(unique_tractors)}
 
-    # --- RENDERIZAÇÃO DO MAPA ---
-    st.write(f"### 🗺️ Mapa Operacional ({', '.join(sel_tractors)})")
-    
-    # Controle de camadas na interface
-    show_waste = st.checkbox("Mostrar Pilhas de Desperdício 3D (Ocio)", value=True)
-    
-    # A ORDEM IMPORTA: O que vem por último fica por cima
-    layers_list = [layer_satellite, layer_scatter] 
-    
-    if show_waste:
-        layers_list.append(layer_hex)
+            cols = st.columns(min(len(unique_tractors), 8))
+            for i, t in enumerate(unique_tractors):
+                c = tractor_colors[t]
+                with cols[i % 8]:
+                    st.markdown(f"**<span style='color:rgb({c[0]},{c[1]},{c[2]})'>◼ {t}</span>**", unsafe_allow_html=True)
 
-    # Tooltip (o que aparece ao passar o mouse)
-    tooltip = {
-        "html": "<b>Atividade:</b> {activity}<br><b>Estado:</b> {state}<br><b>Velocidade:</b> {speed} km/h",
-        "style": {"backgroundColor": "steelblue", "color": "white"}
-    }
+            df_idle['lat_round'] = df_idle['latitude'].round(4)
+            df_idle['lon_round'] = df_idle['longitude'].round(4)
+            
+            df_agg = df_idle.groupby(['lat_round', 'lon_round', 'tractor'], as_index=False)['liters'].sum()
+            df_agg = df_agg[df_agg['liters'] > 0.01]
+            df_agg['liters'] = df_agg['liters'].round(2) 
+            df_agg['color'] = df_agg['tractor'].map(tractor_colors)
 
-    # Renderiza o Deck
-    r = pdk.Deck(
-        layers=layers_list,
-        initial_view_state=view_state,
-        tooltip=tooltip,
-        # Importante: map_style=None para não carregar o mapa padrão do Mapbox por baixo do satélite
-        map_style=None 
-    )
-    
-    st.pydeck_chart(r)
+            layers.append(pdk.Layer(
+                "ColumnLayer",
+                df_agg,
+                get_position=['lon_round', 'lat_round'],
+                get_elevation='liters',
+                get_fill_color='color',
+                radius=5,
+                elevation_scale=1000,
+                pickable=True,
+                auto_highlight=True,
+                opacity=0.8,
+            ))
+            
+            tooltip = {
+                "html": "<b>{tractor}</b><br>Desperdício Local: <b>{liters} L</b>",
+                "style": {"backgroundColor": "black", "color": "white"}
+            }
+            pitch = 60
+        else:
+            st.info("Sem dados de ociosidade para exibir.")
 
-    # --- KPIs (Abaixo do mapa) ---
-    st.divider()
-    c1, c2, c3 = st.columns(3)
-    
-    # Cálculos nos dados TOTAIS (não amostrados) para manter a precisão dos números
-    total_recs = len(df_filtered)
-    if total_recs > 0:
-        idle_count = len(df_filtered[df_filtered['state'] == 'Idle'])
-        idle_pct = (idle_count / total_recs) * 100
+    # ---------------------------------------------------------
+    # MODO B: RASTRO OPERACIONAL 2D (Ajustado)
+    # ---------------------------------------------------------
     else:
-        idle_pct = 0
+        # REGRA DE NEGÓCIO: Transporte vira 'Working' para visualização
+        df_map.loc[df_map['state'] == 'Transport', 'state'] = 'Working'
+
+        state_colors = {
+            'Idle': [214, 39, 40, 200],    # Vermelho
+            'Working': [44, 160, 44, 150], # Verde
+            'Off': [128, 128, 128, 50],    # Cinza
+        }
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**<span style='color:green'>● Trabalhando </span>**", unsafe_allow_html=True)
+        with c2:
+            st.markdown("**<span style='color:red'>● Ocioso </span>**", unsafe_allow_html=True)
+
+        df_map['color'] = df_map['state'].map(state_colors)
+        
+        # Segurança para cores nulas
+        mask_nan = df_map['color'].isna()
+        if mask_nan.any():
+            df_map.loc[mask_nan, 'color'] = pd.Series([[128, 128, 128, 100]] * mask_nan.sum(), index=df_map[mask_nan].index)
+
+        layers.append(pdk.Layer(
+            "ScatterplotLayer",
+            df_map,
+            get_position=['longitude', 'latitude'],
+            get_color='color',
+            get_radius=3, 
+            pickable=True,
+            opacity=0.8,
+            stroked=False
+        ))
+
+        tooltip = {
+            "html": "<b>{tractor}</b><br>Estado: <b>{state}</b><br>Vel: {speed} m/s",
+            "style": {"backgroundColor": "steelblue", "color": "white"}
+        }
+        pitch = 0 
+
+    # Render
+    st.pydeck_chart(pdk.Deck(
+        layers=layers,
+        initial_view_state=pdk.ViewState(
+            latitude=mid_lat, longitude=mid_lon, zoom=14, pitch=pitch
+        ),
+        tooltip=tooltip,
+        map_style=None, 
+        map_provider="mapbox"
+    ))
     
-    c1.metric("Pontos Carregados", f"{total_recs:,}")
-    c2.metric("Resolução do Mapa", f"1:{step}")
-    c3.metric("Frequência de Ociosidade", f"{idle_pct:.1f}%")
+    st.caption(f"Visualizando {len(df_map):,} registros.")
+
+# =============================================================================
+# TAB 2: AUDITORIA E RECLASSIFICAÇÃO (Paginação por Slots)
+# =============================================================================
+def render_tab_replay(df_full):
+    st.markdown("#### Auditoria de Ociosidade (Passo a Passo)")
+    st.caption(
+        "Navegue pelo dia em blocos de tempo fixos. "
+        "Classifique o comportamento da máquina para cada bloco."
+    )
+
+    all_tractors = sorted(df_full['tractor'].unique())
+    
+    # --- Controles de Filtro (Trator/Data) ---
+    c1, c2 = st.columns(2)
+    with c1:
+        sel_tractor = st.selectbox("🚜 Trator:", all_tractors, key="t2_tractor")
+    
+    # Copia para não afetar cache
+    df_t = df_full[df_full['tractor'] == sel_tractor].copy() 
+    if df_t.empty: st.warning("Sem dados."); return
+
+    min_dt_avail, max_dt_avail = df_t['datetime'].min(), df_t['datetime'].max()
+
+    with c2:
+        # Se mudar a data, resetamos o ponteiro de tempo para o início do dia
+        def on_date_change():
+            st.session_state['t2_current_start'] = None
+
+        sel_date = st.date_input(
+            "📅 Data:", 
+            value=min_dt_avail.date(),
+            min_value=min_dt_avail.date(), 
+            max_value=max_dt_avail.date(), 
+            key="t2_date",
+            on_change=on_date_change
+        )
+    
+    df_day = df_t[df_t['datetime'].dt.date == sel_date]
+    if df_day.empty: st.info(f"Sem dados em {sel_date}."); return
+
+    # --- LÓGICA DE PAGINAÇÃO (SLOTS) ---
+    st.markdown("---")
+    
+    # 1. Definição do Tamanho do Slot
+    c_nav1, c_nav2, c_nav3 = st.columns([1, 2, 1])
+    
+    with c_nav1:
+        slot_minutes = st.number_input(
+            "⏱️ Tamanho do Bloco (min):", 
+            min_value=1, max_value=120, value=15, step=5,
+            key="t2_slot_size"
+        )
+    
+    # 2. Inicialização do Estado (Ponteiro de Tempo)
+    # Se não existe ou se mudou o dia, começa no primeiro dado do dia
+    day_start_dt = df_day['datetime'].min().floor(f'{slot_minutes}min')
+    day_end_dt = df_day['datetime'].max()
+
+    if 't2_current_start' not in st.session_state or st.session_state['t2_current_start'] is None:
+        st.session_state['t2_current_start'] = day_start_dt
+    
+    # Garante que o ponteiro está dentro do dia selecionado (caso troque de dia e o ponteiro antigo fique)
+    if st.session_state['t2_current_start'].date() != sel_date:
+        st.session_state['t2_current_start'] = day_start_dt
+
+    # 3. Funções de Navegação
+    def prev_slot():
+        new_time = st.session_state['t2_current_start'] - timedelta(minutes=slot_minutes)
+        if new_time >= day_start_dt:
+            st.session_state['t2_current_start'] = new_time
+        else:
+            st.toast("Início do dia alcançado!", icon="⏮️")
+
+    def next_slot():
+        new_time = st.session_state['t2_current_start'] + timedelta(minutes=slot_minutes)
+        if new_time <= day_end_dt:
+            st.session_state['t2_current_start'] = new_time
+        else:
+            st.toast("Fim dos dados do dia!", icon="⏭️")
+
+    # 4. Botões de Navegação (Centralizados)
+    current_start = st.session_state['t2_current_start']
+    current_end = current_start + timedelta(minutes=slot_minutes)
+
+    with c_nav2:
+        st.markdown(f"<div style='text-align: center; font-weight: bold; padding-top: 10px; font-size: 18px;'>"
+                    f"{current_start.strftime('%H:%M')} ➝ {current_end.strftime('%H:%M')}"
+                    f"</div>", unsafe_allow_html=True)
+        
+        # Botões lado a lado
+        b_col1, b_col2 = st.columns(2)
+        b_col1.button("◀ Anterior", on_click=prev_slot, use_container_width=True)
+        b_col2.button("Próximo ▶", on_click=next_slot, use_container_width=True)
+
+    # --- CLASSIFICAÇÃO (AÇÃO DO USUÁRIO) ---
+    with c_nav3:
+        st.markdown("**Classificar Ociosidade:**")
+        # Radio button para decisão
+        classification = st.radio(
+            "Tipo de Parada:",
+            ["🔴 Desperdício", "🟠 Ócio Necessário"],
+            label_visibility="collapsed",
+            key="t2_class_decision"
+        )
+
+    # --- FILTRAGEM DE DADOS ---
+    df_win = df_day[(df_day['datetime'] >= current_start) & (df_day['datetime'] < current_end)].copy()
+    
+    if df_win.empty:
+        st.warning(f"Sem movimentação registrada entre {current_start.strftime('%H:%M')} e {current_end.strftime('%H:%M')}.")
+        # Mesmo sem dados, mostramos o mapa vazio ou mantemos a estrutura
+    else:
+        # --- OTIMIZAÇÃO (Downsampling) ---
+        MAX_POINTS = 800
+        if len(df_win) > MAX_POINTS:
+            step = len(df_win) // MAX_POINTS
+            df_plot = df_win.iloc[::step].copy()
+            msg_perf = f"Amostra de {len(df_plot)} pontos (de {len(df_win)})"
+        else:
+            df_plot = df_win.copy()
+            msg_perf = f"Total de {len(df_win)} pontos"
+
+        # --- MAPA FOLIUM ---
+        tile_providers = {
+            "Google Híbrido": "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+            "Google Satélite": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+        }
+        sel_tile = st.sidebar.selectbox("🛰️ Mapa (Aba 2):", list(tile_providers.keys()), key="t2_tiles_sel")
+        tile_url = tile_providers[sel_tile]
+
+        mid_lat = df_plot['latitude'].mean()
+        mid_lon = df_plot['longitude'].mean()
+
+        m = folium.Map(
+            location=[mid_lat, mid_lon], 
+            zoom_start=16,
+            tiles=tile_url, 
+            attr="Google Maps"
+        )
+
+        # --- PLOTAGEM COM LÓGICA DE COR (CLASSIFICAÇÃO) ---
+        for _, row in df_plot.iterrows():
+            state = row['state']
+            
+            # Lógica de Cores
+            if state in ['Working', 'Transport']:
+                color = '#2ca02c' # Verde (Sempre Verde)
+                tooltip_txt = "Trabalhando"
+            elif state == 'Idle':
+                # AQUI ESTÁ A MÁGICA:
+                if classification == "🟠 Ócio Necessário":
+                    color = '#ff7f0e' # Laranja/Ambar
+                    tooltip_txt = "Ócio Necessário (Classificado)"
+                else:
+                    color = '#d62728' # Vermelho (Padrão)
+                    tooltip_txt = "Desperdício (Padrão)"
+            else:
+                color = '#7f7f7f' # Cinza
+                tooltip_txt = "Desligado"
+
+            folium.CircleMarker(
+                location=[row['latitude'], row['longitude']],
+                radius=4, 
+                color=color, fill=True, fill_color=color, fill_opacity=0.9, weight=1,
+                tooltip=f"{row['datetime'].strftime('%H:%M:%S')} | {tooltip_txt}"
+            ).add_to(m)
+
+        # --- LEGENDA ATUALIZADA ---
+        legend_html = f"""
+        <div style="
+            position: fixed; bottom: 30px; right: 30px; width: 160px;
+            z-index:9999; font-size:13px; font-family: sans-serif;
+            background-color: rgba(255, 255, 255, 0.9);
+            border: 1px solid grey; border-radius: 6px; padding: 10px;
+        ">
+            <b>Legenda ({classification.split(' ')[1]})</b><br>
+            <div style="margin-top:5px;">
+                <i style="background:#2ca02c; width:10px; height:10px; display:inline-block; border-radius:50%"></i> Trabalhando<br>
+                <i style="background:{'#ff7f0e' if 'Necessário' in classification else '#d62728'}; width:10px; height:10px; display:inline-block; border-radius:50%"></i> <b>{classification.split(' ')[1]}</b><br>
+                <i style="background:#7f7f7f; width:10px; height:10px; display:inline-block; border-radius:50%"></i> Desligado
+            </div>
+        </div>
+        """
+        m.get_root().html.add_child(folium.Element(legend_html))
+
+        st_folium(m, height=600, use_container_width=True, key=f"map_{current_start.strftime('%H%M')}")
+        st.caption(msg_perf)
+
+    # --- RESUMO DO BLOCO ---
+    if not df_win.empty:
+        # Calcular métricas locais
+        total_dt = df_win['delta_t'].sum()
+        idle_dt = df_win.loc[df_win['state']=='Idle', 'delta_t'].sum()
+        liters_idle = df_win.loc[df_win['state']=='Idle', 'liters'].sum()
+        
+        # Mostra um "Card" de confirmação visual
+        st.info(
+            f"**Resumo do Bloco ({slot_minutes} min):** "
+            f"Tempo Parado: **{idle_dt/60:.1f} min** ({idle_dt/total_dt*100:.0f}%) | "
+            f"Consumo em Ocio: **{liters_idle:.2f} L** → "
+            f"Classificado como: **{classification}**"
+        )
+
+# =============================================================================
+# MAIN
+# =============================================================================
+def main():
+    # 1. Cabeçalho (Apenas uma vez)
+    st.title("🚜 Fendt Fleet: Idle Time Analytics")
+    st.markdown(
+        "Produto técnico-tecnológico do MPPV/IFTM — Quantificação do tempo ocioso "
+        "em tratores agrícolas via dados de telemetria de acesso público."
+    )
+
+    # 2. Carregamento de Dados (Apenas uma vez)
+    result = load_data()
+    
+    # Validação
+    if result[0] is None:
+        st.error("Dados não encontrados.")
+        return
+    
+    # Desempacotamento
+    df_full, kpi_tractor, kpi_global = result
+
+    # 3. Aviso de Modo Desenvolvimento (Seguro aqui, fora do @cache)
+    # Verifica se a variável existe e é True
+    if 'DEV_FAST_MODE' in globals() and DEV_FAST_MODE:
+        st.toast(f"⚡ MODO RÁPIDO ATIVO: Usando apenas {len(df_full):,} linhas para testes.", icon="🚀")
+
+    # 4. Configuração da Barra Lateral
+    st.sidebar.header("⚙️ Configuração")
+
+    # 5. Abas e Renderização
+    tab1, tab2 = st.tabs(["📊 Análise de Desperdício", "🛰️ Replay Operacional"])
+
+    with tab1:
+        render_tab_waste(df_full, kpi_tractor, kpi_global)
+    with tab2:
+        render_tab_replay(df_full)
+
 
 if __name__ == "__main__":
     main()

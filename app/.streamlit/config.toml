@@ -1,0 +1,6 @@
+[server]
+maxMessageSize = 4096
+enableCORS = false
+enableXsrfProtection = false
+[global]
+developmentMode = false
