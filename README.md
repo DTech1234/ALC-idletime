@@ -91,7 +91,7 @@ Para rodar a ferramenta de auditoria localmente:
 
 Clone o repositório:
 Bash
-git clone https://github.com/seu-usuario/alc-idletime.git
+https://github.com/DTech1234/ALC-idletime
 cd alc-idletime
 
 Instale as dependências:
