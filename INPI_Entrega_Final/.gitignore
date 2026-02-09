@@ -1,0 +1,26 @@
+# --- .gitignore ---
+
+# Dados (NUNCA suba os dados brutos ou processados pesados)
+data/
+*.csv
+*.parquet
+*.zip
+
+# Arquivos de Sistema e IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Python e Ambientes Virtuais
+__pycache__/
+*.py[cod]
+venv/
+env/
+.env
+.ipynb_checkpoints/
+
+# Logs e builds
+*.log
+build/
+dist/
+.venv/
