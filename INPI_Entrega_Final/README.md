@@ -16,7 +16,7 @@ O ALC-idletime é uma aplicação web de Engenharia de Dados e Auditoria Visual 
 
 Diferente de soluções de mercado que operam como "caixa preta", este sistema implementa uma abordagem determinística e auditável (White-box AI) para a classificação de ociosidade em frotas mecanizadas. A ferramenta processa dados de alta frequência (CAN Bus), aplica regras físicas de detecção de paradas e oferece uma interface Human-in-the-loop para que especialistas validem e reclassifiquem eventos (ex: distinguir "Desperdício" de "Ócio Necessário").
 
-O sistema foi validado com o dataset Agricultural Load Cycles (TUM), processando +31 milhões de registros de tratores Fendt em operações reais na Alemanha.
+O sistema foi validado com o dataset Agricultural Load Cycles (TUM) https://doi.org/10.1016/j.dib.2025.111494, processando +31 milhões de registros de tratores Fendt em operações reais na Alemanha.
 
 🚀 Funcionalidades Chave
 1. Motor de Processamento (Backend)
@@ -91,7 +91,7 @@ Para rodar a ferramenta de auditoria localmente:
 
 Clone o repositório:
 Bash
-git clone https://github.com/seu-usuario/alc-idletime.git
+https://github.com/DTech1234/ALC-idletime
 cd alc-idletime
 
 Instale as dependências:
