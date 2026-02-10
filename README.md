@@ -9,7 +9,7 @@
 🚜 ALC-idletime: Sistema de Auditoria de Telemetria Agrícola
 Nota Acadêmica: Este software é o Produto Técnico Tecnológico desenvolvido no âmbito da Dissertação de Mestrado apresentada ao Programa de Mestrado Profissional em Produção Vegetal do Instituto Federal do Triângulo Mineiro (IFTM).
 
-Autor: Daniel Abreu, Cientista de Dados Sênior & Mestrando.
+Autor: Daniel Abreu.
 
 📖 Sobre o Produto
 O ALC-idletime é uma aplicação web de Engenharia de Dados e Auditoria Visual projetada para transformar dados brutos de telemetria agrícola em inteligência operacional.
@@ -35,7 +35,7 @@ Mapa de calor 3D identificando "zonas quentes" de desperdício de combustível.
 
 KPIs dinâmicos de consumo e emissões de CO₂.
 
-Módulo de Replay & Reclassificação (Aba 2):
+Módulo de Replay & Reclassificação:
 
 Ferramenta de Auditoria Visual sobre imagens de satélite (Google/ESRI).
 
