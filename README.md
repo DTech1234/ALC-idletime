@@ -37,7 +37,7 @@ ALC-idletime/
 ├── notebooks/
 │   ├── 01_ingest_EDA.ipynb       # Data ingestion, cleaning, canonicalization, EDA
 │   ├── 02_analysis.ipynb         # State classification, waste analysis, impact estimation
-│   ├── Graphical_Abstract.png    # Graphical abstract for the dissertation
+│   ├── Graphical_Abstract.png    # Graphical abstract
 │   └── requirements.txt
 ├── reports/
 │   └── figures/                  # Exported charts
