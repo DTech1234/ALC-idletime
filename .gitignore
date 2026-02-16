@@ -24,3 +24,6 @@ env/
 build/
 dist/
 .venv/
+
+# Future annotation app idealization
+main.py

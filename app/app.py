@@ -14,7 +14,7 @@ st.set_page_config(layout="wide", page_title="Fendt Fleet: Idle Time Analytics",
 DIESEL_PRICE_EUR = 1.588
 EMISSION_FACTOR = 2.64
 DELTA_T_CUTOFF = 300
-DEV_FAST_MODE = True
+DEV_FAST_MODE = False
 
 
 @st.cache_data(show_spinner="Loading data...")
