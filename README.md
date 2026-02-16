@@ -109,13 +109,14 @@ Your folder should look like this:
 ```
 data/
 └── raw/
-    ├── Fendt 211/activities/Fields.csv
+    ├── Fendt 211/"all activities folder"/Fields.csv
     ├──          /Fendt 211.csv
     ├── Fendt 314/...
     ├── Fendt 722/...
     ├── Fendt 724/...
     └── Fendt 820/...
 ```
+Simply past each unziped tractor inside raw folder and it should work. You can also get rid of the .pkl files if you want.
 
 ### 5. Run the notebooks (in order)
 
