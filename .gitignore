@@ -1,29 +1,35 @@
-# --- .gitignore ---
+# --- Data files (structure tracked via .gitkeep, contents excluded) ---
+data/raw/*
+data/processed/*
+data/curated/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/curated/.gitkeep
 
-# Dados (NUNCA suba os dados brutos ou processados pesados)
-data/
+# --- Large / generated files ---
 *.csv
 *.parquet
 *.zip
 
-# Arquivos de Sistema e IDE
-.vscode/
-.idea/
-.DS_Store
-
-# Python e Ambientes Virtuais
+# --- Python ---
 __pycache__/
 *.py[cod]
+.venv/
 venv/
 env/
 .env
 .ipynb_checkpoints/
 
-# Logs e builds
+# --- IDE / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Build ---
 *.log
 build/
 dist/
-.venv/
 
-# Future annotation app idealization
+# --- Desktop app (not part of the dissertation deliverable) ---
 main.py
