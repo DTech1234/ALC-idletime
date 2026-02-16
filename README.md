@@ -109,11 +109,12 @@ Your folder should look like this:
 ```
 data/
 └── raw/
-    ├── Fendt 211.csv
-    ├── Fendt 314.csv
-    ├── Fendt 722.csv
-    ├── Fendt 724.csv
-    └── Fendt 820.csv
+    ├── Fendt 211/activities/Fields.csv
+    ├──          /Fendt 211.csv
+    ├── Fendt 314/...
+    ├── Fendt 722/...
+    ├── Fendt 724/...
+    └── Fendt 820/...
 ```
 
 ### 5. Run the notebooks (in order)
