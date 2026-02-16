@@ -39,8 +39,6 @@ ALC-idletime/
 │   ├── 02_analysis.ipynb         # State classification, waste analysis, impact estimation
 │   ├── Graphical_Abstract.png    # Graphical abstract
 │   └── requirements.txt
-├── reports/
-│   └── figures/                  # Exported charts
 ├── requirements.txt
 ├── LICENSE
 └── README.md
