@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+title: "ALC-idletime: Agricultural Idle Time Analytics"
+message: "If you use this software, please cite the associated dissertation."
+type: software
+authors:
+  - family-names: Abreu
+    given-names: Daniel
+    affiliation: Instituto Federal do Triângulo Mineiro (IFTM)
+repository-code: https://github.com/DTech1234/ALC-idletime
+license: MIT
+preferred-citation:
+  type: thesis
+  title: >-
+    Quantificação do Potencial de Redução de Emissões e Custos por Meio da
+    Otimização do Tempo Ocioso de Tratores Agrícolas: Uma Análise Baseada em
+    Dados de Telemetria de Acesso Público
+  authors:
+    - family-names: Abreu
+      given-names: Daniel
+  year: 2026
+  institution:
+    name: Instituto Federal do Triângulo Mineiro
+  department: Mestrado Profissional em Produção Vegetal
+  thesis-type: "Master's Thesis"
+  location:
+    city: Uberaba
+    country: BR
