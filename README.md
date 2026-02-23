@@ -2,7 +2,7 @@
 
 Quantifying the potential for emission reduction and cost savings through idle time optimization in agricultural tractors, based on publicly available telemetry data.
 
-> **Dissertation:** ABREU, Daniel. *Quantificação do Potencial de Redução de Emissões e Custos por Meio da Otimização do Tempo Ocioso de Tratores Agrícolas: Uma Análise Baseada em Dados de Telemetria de Acesso Público.* 2026. Dissertação (Mestrado Profissional em Produção Vegetal) — Instituto Federal do Triângulo Mineiro, Uberaba. (sob revisão pré - under revision).
+> **Dissertation:** ABREU, Daniel. *Quantificação do Potencial de Redução de Emissões e Custos por Meio da Otimização do Tempo Ocioso de Tratores Agrícolas: Uma Análise Baseada em Dados de Telemetria de Acesso Público.* 2026. Dissertação (Mestrado Profissional em Produção Vegetal) — Instituto Federal do Triângulo Mineiro, Uberaba. (SOB REVISÃO  - UNDER REVISION).
 
 ---
 
