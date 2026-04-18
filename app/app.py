@@ -20,8 +20,12 @@ DEV_FAST_MODE = False
 @st.cache_data(show_spinner="Loading data...")
 def load_data():
     """Load parquet → rebuild delta_t → compute fuel & KPIs."""
-    path = Path(__file__).parent.parent / "data" / "processed" / "telemetry_app.parquet"
+    
+    path = Path(__file__).resolve().parent.parent / "data" / "processed" / "telemetry_app.parquet"
+    
     if not path.exists():
+        # Vamos forçar o app a mostrar onde ele está procurando
+        st.error(f"Arquivo não encontrado! O app procurou exatamente aqui: {path}")
         return None, None, None
 
     cols = ['timestamp', 'tractor', 'latitude', 'longitude',
