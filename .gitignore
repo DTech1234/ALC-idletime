@@ -19,6 +19,7 @@ venv/
 env/
 .env
 .ipynb_checkpoints/
+merge.py
 
 # --- IDE / OS ---
 .vscode/
