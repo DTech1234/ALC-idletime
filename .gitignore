@@ -10,7 +10,9 @@ data/curated/*
 *.csv
 *.parquet
 *.zip
-
+reports/
+context/
+reproject/
 # --- Python ---
 __pycache__/
 *.py[cod]
