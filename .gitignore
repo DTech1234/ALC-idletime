@@ -13,6 +13,7 @@ data/curated/*
 reports/
 context/
 reproject/
+
 # --- Python ---
 __pycache__/
 *.py[cod]
@@ -33,6 +34,3 @@ Thumbs.db
 *.log
 build/
 dist/
-
-# --- Desktop app (not part of the dissertation deliverable) ---
-main.py
