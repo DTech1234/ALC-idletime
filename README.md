@@ -156,6 +156,7 @@ The app will open in your browser (default: `http://localhost:8501`).
 
 - **Tab 1 — Waste Analysis:** Fleet KPIs, 3D waste concentration map (pydeck), 2D operational trail with state color-coding
 - **Tab 2 — Operational Replay:** Step through the day in configurable time blocks, classify idle events as "Waste" or "Necessary Idle" on a satellite map
+- **Tab 3 - Annotation Tool:** Used to correct idle time during operations, it is an ongoing effort to test a machine learning classifier to try to predict the non labeled activities. (Under Construction)
 
 > 💡 *The app starts in fast mode (`DEV_FAST_MODE = True`), loading only 500k rows for quick testing. Set it to `False` in `app.py` to load the full dataset.*
 
